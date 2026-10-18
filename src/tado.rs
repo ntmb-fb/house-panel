@@ -63,7 +63,13 @@ impl Client {
         let access = tok["access_token"].as_str().ok_or("no access_token in refresh reply")?.to_string();
         // Write-then-rename so a crash never leaves a half-written token file.
         let tmp = self.path.with_extension("tmp");
-        std::fs::write(&tmp, tok.to_string()).and_then(|_| std::fs::rename(&tmp, &self.path)).map_err(|e| e.to_string())?;
+        let write = || {
+            use std::{io::Write, os::unix::fs::OpenOptionsExt};
+            let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
+            f.write_all(tok.to_string().as_bytes())?;
+            std::fs::rename(&tmp, &self.path)
+        };
+        write().map_err(|e| e.to_string())?;
         self.expires = Instant::now() + Duration::from_secs(tok["expires_in"].as_u64().unwrap_or(600).saturating_sub(60));
         self.access = access.clone();
         Ok(access)
