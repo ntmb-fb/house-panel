@@ -1,0 +1,14 @@
+services:
+  house-panel:
+    image: ghcr.io/ntmb-fb/house-panel:latest
+    restart: unless-stopped
+    init: true
+    # Host network: Wake-on-LAN broadcasts for the TV do not leave Docker's bridge network.
+    network_mode: host
+    # uid:gid that owns /volume1/docker/house-panel (the tado token file is rewritten).
+    user: "1030:100"
+    environment:
+      PORT: "8770"
+    volumes:
+      - /volume1/docker/house-panel/data:/data
+      - /volume1/docker/house-panel/floorplan:/floorplan:ro

@@ -1,0 +1,65 @@
+# Copy to <data>/config.toml. Secrets live next to it: hue-key, lgtv-key, tado-token.json.
+
+[hue]
+ip = "192.168.8.61"
+
+# Floorplan element -> Hue light or group (v1 ids). Tap toggles; long-press a light for brightness.
+[hue.elements]
+"room-tv_stue" = "group/83"
+"room-spisestue" = "group/84"
+"room-kontor" = "group/86"
+"room-gym" = "group/1"
+"room-z_hems" = "group/16"
+"room-z_loftrum" = "group/87"
+"room-z_3dprint" = "group/15"
+"room-z_baghave" = "group/85"
+"dev-tv_venstre" = "light/6"
+"dev-tv_hojre" = "light/16"
+"dev-spisebord" = "light/17"
+"dev-repos" = "light/18"
+"dev-kontor_lys" = "light/19"
+"dev-fitness_lys" = "light/15"
+"dev-hems_lys" = "light/12"
+"dev-loft_led" = "light/14"
+"dev-p1p_strom" = "light/13"
+"dev-baghave_lys" = "light/20"
+
+[[bluos]]
+name = "Soundbar"
+ips = ["192.168.8.71", "192.168.8.58"]
+element = "dev-soundbar"
+
+[[bluos]]
+name = "Pulse Mini"
+ips = ["192.168.8.59", "192.168.8.63"]
+element = "dev-pulse_mini"
+
+[onkyo]
+ip = "192.168.8.75"
+element = "dev-onkyo"
+
+[lgtv]
+ip = "192.168.8.73"
+mac = "aa:bb:cc:dd:ee:ff"  # for Wake-on-LAN
+element = "dev-lg_tv"
+
+[tado]
+home = 123456  # tado home id
+interval_minutes = 30
+
+[tado.zones.7]
+name = "Stue (tado)"
+element = "dev-tado_stue"
+value = "val-tado_stue"
+
+[tado.zones.8]
+name = "Pejse (tado)"
+element = "dev-tado_kontor"
+value = "val-tado_kontor"
+
+[panel]
+# Battery devices are never contacted, so they show greyed out.
+unavailable = ["dev-luba", "dev-cam_hoveddor", "dev-cam_garage", "dev-cam_terrasse", "dev-cam_inde"]
+# Value texts with no data source yet.
+blank = ["val-luba", "val-cam_hoveddor", "val-cam_garage", "val-cam_terrasse", "val-cam_inde",
+         "val-luftrenser", "val-netatmo_inde", "val-netatmo_ude", "val-tesla"]
