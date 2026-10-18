@@ -1,6 +1,6 @@
 services:
   house-panel:
-    image: ghcr.io/ntmb-fb/house-panel:latest
+    image: ntmb/house-panel:latest
     restart: unless-stopped
     init: true
     # Host network: Wake-on-LAN broadcasts for the TV do not leave Docker's bridge network.
