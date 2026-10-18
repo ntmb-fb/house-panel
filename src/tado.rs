@@ -102,13 +102,20 @@ pub async fn run(cfg: Config, token_path: PathBuf, hub: Arc<Hub>, mut rx: mpsc::
     let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build().unwrap();
     let mut c = Client { http, path: token_path, access: String::new(), expires: Instant::now() };
     let mut round = 0u64;
+    let mut retry = 2;
     loop {
-        // After a failure (e.g. no internet yet after a reboot) try again in 2 minutes.
+        // After a failure (e.g. no internet yet after a reboot) retry soon, doubling the wait
+        // each time so lasting errors (rate limit, revoked login) don't burn tado's daily quota.
         let minutes = match poll(&mut c, &cfg, &hub, round % 8 == 0).await {
-            Ok(()) => cfg.interval_minutes,
+            Ok(()) => {
+                retry = 2;
+                cfg.interval_minutes
+            }
             Err(e) => {
                 eprintln!("tado: {e}");
-                2
+                let wait = retry.min(cfg.interval_minutes);
+                retry *= 2;
+                wait
             }
         };
         round += 1;
