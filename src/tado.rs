@@ -59,17 +59,8 @@ impl Client {
         if !res.status().is_success() {
             return Err(format!("token refresh failed ({}); redo the device login", res.status()));
         }
-        let tok: Value = res.json().await.map_err(|e| e.to_string())?;
-        let access = tok["access_token"].as_str().ok_or("no access_token in refresh reply")?.to_string();
-        // Write-then-rename so a crash never leaves a half-written token file.
-        let tmp = self.path.with_extension("tmp");
-        let write = || {
-            use std::{io::Write, os::unix::fs::OpenOptionsExt};
-            let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
-            f.write_all(tok.to_string().as_bytes())?;
-            std::fs::rename(&tmp, &self.path)
-        };
-        write().map_err(|e| e.to_string())?;
+        let tok = save_token(&self.path, res.json().await.map_err(|e| e.to_string())?, refresh)?;
+        let access = tok["access_token"].as_str().unwrap_or_default().to_string();
         self.expires = Instant::now() + Duration::from_secs(tok["expires_in"].as_u64().unwrap_or(600).saturating_sub(60));
         self.access = access.clone();
         Ok(access)
@@ -86,16 +77,42 @@ impl Client {
     }
 }
 
+/// Saves a refresh reply, keeping the old refresh token if the reply has none,
+/// so the file always holds a usable login.
+fn save_token(path: &std::path::Path, mut tok: Value, old_refresh: &str) -> Result<Value, String> {
+    if tok["access_token"].as_str().is_none() {
+        return Err("no access_token in refresh reply".into());
+    }
+    if tok["refresh_token"].as_str().is_none() {
+        tok["refresh_token"] = old_refresh.into();
+    }
+    // Write-then-rename so a crash never leaves a half-written token file.
+    let tmp = path.with_extension("tmp");
+    let write = || {
+        use std::{io::Write, os::unix::fs::OpenOptionsExt};
+        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
+        f.write_all(tok.to_string().as_bytes())?;
+        std::fs::rename(&tmp, path)
+    };
+    write().map_err(|e| e.to_string())?;
+    Ok(tok)
+}
+
 pub async fn run(cfg: Config, token_path: PathBuf, hub: Arc<Hub>, mut rx: mpsc::Receiver<Value>) {
     let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build().unwrap();
     let mut c = Client { http, path: token_path, access: String::new(), expires: Instant::now() };
     let mut round = 0u64;
     loop {
-        if let Err(e) = poll(&mut c, &cfg, &hub, round % 8 == 0).await {
-            eprintln!("tado: {e}");
-        }
+        // After a failure (e.g. no internet yet after a reboot) try again in 2 minutes.
+        let minutes = match poll(&mut c, &cfg, &hub, round % 8 == 0).await {
+            Ok(()) => cfg.interval_minutes,
+            Err(e) => {
+                eprintln!("tado: {e}");
+                2
+            }
+        };
         round += 1;
-        let wait = tokio::time::sleep(Duration::from_secs(cfg.interval_minutes * 60));
+        let wait = tokio::time::sleep(Duration::from_secs(minutes * 60));
         tokio::select! {
             _ = wait => {}
             Some(cmd) = rx.recv() => {
@@ -179,5 +196,20 @@ mod tests {
         assert_eq!(out[0].1["temp"], 21.4);
         assert_eq!(out[0].1["heating"], true);
         assert_eq!(out[0].1["overlay"], false);
+    }
+
+    #[test]
+    fn token_file_keeps_a_refresh_token() {
+        let path = std::env::temp_dir().join(format!("tado-token-test-{}.json", std::process::id()));
+        save_token(&path, json!({ "access_token": "a1" }), "old").unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["refresh_token"], "old");
+        save_token(&path, json!({ "access_token": "a2", "refresh_token": "new" }), "old").unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["refresh_token"], "new");
+        assert!(save_token(&path, json!({ "error": "x" }), "old").is_err());
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        std::fs::remove_file(&path).unwrap();
     }
 }

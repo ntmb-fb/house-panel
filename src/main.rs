@@ -7,9 +7,10 @@ mod xml;
 
 use axum::{
     Json, Router,
-    extract::State,
-    http::{StatusCode, header::CONTENT_TYPE},
-    response::{Html, sse::{Event, KeepAlive, Sse}},
+    extract::{Request, State},
+    http::{StatusCode, header::{CONTENT_TYPE, HOST}},
+    middleware::{self, Next},
+    response::{Html, Response, sse::{Event, KeepAlive, Sse}},
     routing::{get, post},
 };
 use futures_util::{Stream, StreamExt, stream};
@@ -18,6 +19,7 @@ use serde_json::{Map, Value, json};
 use std::{
     collections::{BTreeMap, HashMap},
     convert::Infallible,
+    net::IpAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -158,10 +160,30 @@ async fn main() {
         .route("/api/events", get(events))
         .route("/api/cmd", post(command))
         .nest_service("/floorplan", ServeDir::new(floorplan))
+        .layer(middleware::from_fn(check_host))
         .with_state(app);
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await.unwrap();
     eprintln!("house-panel listening on :{port}");
     axum::serve(listener, router).await.unwrap();
+}
+
+/// Blocks DNS rebinding: a web page on some other domain pointing that domain at the NAS
+/// to send commands. Only names that can't come from the internet are let through.
+async fn check_host(req: Request, next: Next) -> Result<Response, StatusCode> {
+    let host = req.headers().get(HOST).and_then(|h| h.to_str().ok()).unwrap_or("");
+    if local_host(host) { Ok(next.run(req).await) } else { Err(StatusCode::FORBIDDEN) }
+}
+
+/// An IP address, a single-label name ("buids") or a LAN-only suffix, with or without port.
+fn local_host(host: &str) -> bool {
+    let name = match host.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => host.rsplit_once(':').map_or(host, |(h, _)| h),
+    }
+    .to_ascii_lowercase();
+    name.parse::<IpAddr>().is_ok()
+        || (!name.is_empty() && !name.contains('.'))
+        || [".local", ".lan", ".home.arpa"].iter().any(|s| name.ends_with(s))
 }
 
 /// Server-sent events: a full snapshot first, then one message per change.
@@ -189,5 +211,20 @@ async fn command(State(app): State<Arc<App>>, Json(cmd): Json<Map<String, Value>
     match tx.try_send(Value::Object(cmd)) {
         Ok(()) => StatusCode::ACCEPTED,
         Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_host;
+
+    #[test]
+    fn only_lan_hosts_pass() {
+        for ok in ["192.168.8.26:8770", "192.168.8.26", "localhost:8770", "buids", "BuiDS.local:8770", "nas.lan", "[::1]:8770"] {
+            assert!(local_host(ok), "{ok}");
+        }
+        for bad in ["evil.example.com", "192.168.8.26.evil.com:8770", "local.evil.com", ""] {
+            assert!(!local_host(bad), "{bad}");
+        }
     }
 }

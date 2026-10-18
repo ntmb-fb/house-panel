@@ -155,7 +155,7 @@ pop.addEventListener('click', e => {
     render();
     clearTimeout(tadoTimer);
     const zone = open.zone, target = tadoPending;
-    tadoTimer = setTimeout(() => send({ dev: 'tado', zone, target }), 1500);
+    tadoTimer = setTimeout(() => { tadoTimer = null; send({ dev: 'tado', zone, target }); }, 1500);
   }
 });
 pop.addEventListener('change', e => {
@@ -178,6 +178,9 @@ pop.addEventListener('change', e => {
     const d = JSON.parse(e.data);
     Object.assign(S, d);
     for (const id in d) (byId[id] || []).forEach(apply);
-    if (open && open.id in d) render();
+    if (open && open.id in d) {
+      if (!tadoTimer) tadoPending = null; // the real target has arrived; show it
+      render();
+    }
   };
 })();

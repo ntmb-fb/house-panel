@@ -10,7 +10,7 @@ use rustls::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc, time::{Duration, Instant}};
 use tokio::{net::TcpStream, sync::mpsc, time::timeout};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -38,6 +38,7 @@ pub async fn run(cfg: Config, key: String, hub: Arc<Hub>, mut rx: mpsc::Receiver
         if let Ok(Some(c)) = timeout(Duration::from_secs(15), rx.recv()).await {
             if c["action"] == "power" && c["on"] == true {
                 wake(&cfg).await;
+                tokio::time::sleep(Duration::from_secs(5)).await; // the TV needs a few seconds to boot
             }
         }
     }
@@ -87,11 +88,12 @@ async fn session(cfg: &Config, key: &str, hub: &Hub, rx: &mut mpsc::Receiver<Val
 
     let mut ping = tokio::time::interval(Duration::from_secs(20));
     let mut n = 0;
+    let mut seen = Instant::now();
     loop {
         tokio::select! {
-            // Pings every 20 s get pongs, so 60 s of silence means the TV went away.
-            msg = timeout(Duration::from_secs(60), ws.next()) => {
-                match msg.map_err(|_| "TV stopped answering")? {
+            msg = ws.next() => {
+                seen = Instant::now();
+                match msg {
                     Some(Ok(Message::Text(t))) => {
                         if let Ok(v) = serde_json::from_str::<Value>(&t) {
                             if let Some(patch) = parse(&v) {
@@ -104,7 +106,13 @@ async fn session(cfg: &Config, key: &str, hub: &Hub, rx: &mut mpsc::Receiver<Val
                     None => return Ok(()),
                 }
             }
-            _ = ping.tick() => ws.send(Message::Ping(Default::default())).await.map_err(|e| e.to_string())?,
+            _ = ping.tick() => {
+                // Pings every 20 s get pongs, so 60 s of silence means the TV went away.
+                if seen.elapsed() > Duration::from_secs(60) {
+                    return Err("TV stopped answering".into());
+                }
+                ws.send(Message::Ping(Default::default())).await.map_err(|e| e.to_string())?;
+            }
             Some(c) = rx.recv() => {
                 if c["action"] == "power" && c["on"] == true {
                     wake(cfg).await; // on but in standby: WoL wakes it fully
